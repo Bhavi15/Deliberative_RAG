@@ -1,55 +1,103 @@
-"""Document indexing pipeline.
+"""Evaluation-dataset indexer.
 
-Handles loading raw documents, chunking them into passages, embedding each
-passage, and upserting the result into the Qdrant vector store.
+Reads ``data/evaluation/master_eval_dataset.json`` and indexes every
+evidence passage into the Qdrant ``eval_documents`` collection with
+metadata (source_type, is_correct, dataset_source).
+
+Usage:
+    python -m src.vectorstore.indexer
 """
 
-from src.schemas import Document, Passage
-from src.vectorstore.embeddings import Embedder
-from src.vectorstore.qdrant_client import QdrantStore
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from src.vectorstore.embeddings import EmbeddingModel
+from src.vectorstore.qdrant_client import QdrantManager
+
+DATASET_PATH = Path("data/evaluation/master_eval_dataset.json")
 
 
-class Indexer:
-    """Orchestrates the full document → passage → embedding → upsert flow."""
+def load_passages(path: Path = DATASET_PATH) -> tuple[list[str], list[dict]]:
+    """Read the master eval dataset and flatten all evidence passages.
 
-    def __init__(self, store: QdrantStore, embedder: Embedder) -> None:
-        """Initialise the indexer with a store and embedder.
+    For every record in the dataset each evidence passage with non-empty
+    text becomes one indexable document.  Metadata tracks which dataset it
+    came from, the passage's ``source`` label (e.g. ``"parametric_memory"``
+    or a URL), and whether the passage represents the factually correct
+    evidence (for ConflictQA, ``counter_memory`` is the correct one).
 
-        Args:
-            store: Configured QdrantStore to write into.
-            embedder: Embedder instance to generate passage vectors.
-        """
-        pass
+    Args:
+        path: Path to the master JSON dataset file.
 
-    def index_documents(self, documents: list[Document]) -> int:
-        """Chunk, embed, and index a list of documents.
+    Returns:
+        Tuple of (texts, metadatas) aligned by index.
+    """
+    with open(path, encoding="utf-8") as f:
+        records = json.load(f)
 
-        Args:
-            documents: Raw Document objects to process.
+    texts: list[str] = []
+    metadatas: list[dict] = []
 
-        Returns:
-            Total number of passages indexed.
-        """
-        pass
+    for rec in records:
+        dataset_source = rec["source_dataset"]
+        question = rec["question"]
+        has_conflict = rec["has_known_conflict"]
 
-    def chunk_document(self, document: Document) -> list[Passage]:
-        """Split a document into overlapping passage chunks.
+        for passage in rec["evidence_passages"]:
+            text = passage.get("text", "").strip()
+            if not text:
+                continue
 
-        Args:
-            document: Document to chunk.
+            source_type = passage.get("source", "unknown")
 
-        Returns:
-            List of Passage objects derived from the document text.
-        """
-        pass
+            # For ConflictQA the counter_memory passage is the factually
+            # correct one; parametric_memory is the LLM hallucination.
+            if dataset_source == "conflict_qa":
+                is_correct = source_type == "counter_memory"
+            else:
+                is_correct = True
 
-    def index_dataset(self, dataset_name: str) -> int:
-        """Load a benchmark dataset and index all its documents.
+            texts.append(text)
+            metadatas.append({
+                "dataset_source": dataset_source,
+                "source_type": source_type,
+                "is_correct": is_correct,
+                "has_known_conflict": has_conflict,
+                "question": question,
+                "record_id": rec["id"],
+            })
 
-        Args:
-            dataset_name: One of ``"conflict_qa"``, ``"frames"``, or ``"finance_bench"``.
+    return texts, metadatas
 
-        Returns:
-            Total number of passages indexed.
-        """
-        pass
+
+def run_indexer() -> None:
+    """Load, embed, index, and print collection summary."""
+    print("Loading passages from master eval dataset...")
+    texts, metadatas = load_passages()
+    print(f"  {len(texts)} non-empty passages found\n")
+
+    print("Loading embedding model...")
+    embedder = EmbeddingModel()
+    print(f"  Model loaded — vector dim = {embedder.vector_size}\n")
+
+    print("Embedding passages...")
+    embeddings = embedder.embed_batch(texts)
+    print(f"  {len(embeddings)} vectors produced\n")
+
+    print("Indexing into Qdrant...")
+    manager = QdrantManager()
+    count = manager.add_documents(texts, embeddings, metadatas)
+    print(f"  {count} points upserted\n")
+
+    info = manager.collection_info()
+    print("Collection info:")
+    for k, v in info.items():
+        print(f"  {k}: {v}")
+
+    manager.close()
+
+
+if __name__ == "__main__":
+    run_indexer()
