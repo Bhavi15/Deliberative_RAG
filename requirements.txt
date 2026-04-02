@@ -1,0 +1,39 @@
+# LLM & orchestration
+langchain-anthropic>=0.3
+langgraph>=0.2
+langchain-core>=0.3
+
+# Vector store
+qdrant-client>=1.9
+
+# Embeddings
+sentence-transformers>=3.0
+
+# Conflict graph
+networkx>=3.3
+
+# Data models
+pydantic>=2.7
+pydantic-settings>=2.3
+
+# API
+fastapi>=0.111
+uvicorn[standard]>=0.30
+
+# UI
+streamlit>=1.35
+
+# Datasets
+datasets>=2.20
+huggingface-hub>=0.23
+
+# Utilities
+python-dotenv>=1.0
+tenacity>=8.3
+structlog>=24.2
+
+# Dev / test
+pytest>=8.0
+pytest-asyncio>=0.23
+httpx>=0.27
+ruff>=0.4

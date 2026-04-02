@@ -1,0 +1,4 @@
+# Deliberation Synthesis Prompt
+# Stage 6: Generate a final answer with an explicit reasoning trace and
+# calibrated confidence score given scored, possibly-conflicting claims.
+# Placeholders: {query}, {scored_claims}, {conflict_summary}

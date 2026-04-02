@@ -1,0 +1,3 @@
+# Query Analysis Prompt
+# Stage 1: Decompose the user query into focused sub-queries.
+# Placeholders: {query}

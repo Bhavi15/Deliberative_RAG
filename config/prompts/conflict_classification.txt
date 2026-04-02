@@ -1,0 +1,4 @@
+# Conflict Detection Prompt
+# Stage 4: Classify the relationship between two claims.
+# Relationship types: supports | contradicts | supersedes | unrelated
+# Placeholders: {claim_a}, {claim_b}
