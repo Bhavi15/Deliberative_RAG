@@ -2,8 +2,8 @@
 
 import pytest
 
-from src.models import Claim, ScoredClaim
-from src.pipeline.scoring import compute_authority_score, compute_graph_score, compute_temporal_score, score_claim
+from src.schemas import Claim, ScoredClaim
+from src.pipeline.scorer import compute_authority_score, compute_graph_score, compute_temporal_score, score_claim
 
 
 def test_score_claim_composite_within_bounds(sample_claim: Claim) -> None:

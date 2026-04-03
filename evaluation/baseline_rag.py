@@ -5,17 +5,17 @@ scoring, or deliberative synthesis. Used as the comparison baseline
 when evaluating the deliberative system.
 """
 
-from src.schemas import Answer
+from src.schemas import DeliberationResult
 
 
-def run_baseline(query_text: str) -> Answer:
+def run_baseline(query_text: str) -> DeliberationResult:
     """Execute a naive RAG pipeline — retrieve top-k, concatenate, generate.
 
     Args:
         query_text: Raw user query string.
 
     Returns:
-        Answer object (reasoning_trace will be empty, confidence fixed at 1.0).
+        DeliberationResult with empty reasoning trace and high confidence.
     """
     pass
 

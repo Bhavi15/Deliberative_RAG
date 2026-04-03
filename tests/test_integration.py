@@ -6,7 +6,7 @@ in-memory Qdrant instance to avoid external dependencies.
 
 import pytest
 
-from src.schemas import Answer
+from src.schemas import DeliberationResult
 
 
 def test_full_pipeline_returns_answer() -> None:

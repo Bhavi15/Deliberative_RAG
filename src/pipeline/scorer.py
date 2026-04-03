@@ -4,11 +4,10 @@ Scores each claim by combining temporal recency, source authority, and
 graph-derived evidence weight into a single composite score.
 """
 
-from src.models import Claim, ConflictEdge, ScoredClaim
-from src.pipeline.graph import PipelineState
+from src.schemas import Claim, ConflictEdge, ScoredClaim
 
 
-def scoring_node(state: PipelineState) -> PipelineState:
+def scoring_node(state: dict) -> dict:
     """LangGraph node: compute composite scores for all claims.
 
     Args:

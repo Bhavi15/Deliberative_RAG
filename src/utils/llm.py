@@ -4,10 +4,12 @@ Centralises model configuration so all pipeline stages share a single,
 consistently configured ChatAnthropic instance.
 """
 
+from __future__ import annotations
+
 from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 
 class LLMClient:
@@ -21,7 +23,11 @@ class LLMClient:
             temperature: Sampling temperature.
             max_tokens: Maximum tokens in the response.
         """
-        pass
+        self._llm = ChatAnthropic(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
     def invoke(self, prompt: str) -> str:
         """Send a plain-text prompt and return the response text.
@@ -32,7 +38,8 @@ class LLMClient:
         Returns:
             Model response as a plain string.
         """
-        pass
+        response = self._llm.invoke([HumanMessage(content=prompt)])
+        return response.content
 
     def invoke_messages(self, messages: list[BaseMessage]) -> str:
         """Send a list of LangChain messages and return the response text.
@@ -43,7 +50,8 @@ class LLMClient:
         Returns:
             Model response as a plain string.
         """
-        pass
+        response = self._llm.invoke(messages)
+        return response.content
 
     def invoke_structured(self, prompt: str, output_schema: type) -> object:
         """Invoke with structured output parsing via with_structured_output.
@@ -55,7 +63,8 @@ class LLMClient:
         Returns:
             Parsed instance of output_schema.
         """
-        pass
+        structured_llm = self._llm.with_structured_output(output_schema)
+        return structured_llm.invoke([HumanMessage(content=prompt)])
 
 
 @lru_cache(maxsize=1)
@@ -65,4 +74,10 @@ def get_llm() -> LLMClient:
     Returns:
         Singleton LLMClient instance.
     """
-    pass
+    from config.settings import get_settings
+    settings = get_settings()
+    return LLMClient(
+        model=settings.llm_model,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+    )

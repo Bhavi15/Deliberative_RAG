@@ -6,10 +6,10 @@ Implements the three core metrics defined in CLAUDE.md:
 3. Confidence Calibration (ECE)
 """
 
-from src.schemas import Answer
+from src.schemas import DeliberationResult
 
 
-def compute_factual_accuracy(predictions: list[Answer], ground_truths: list[str]) -> float:
+def compute_factual_accuracy(predictions: list[DeliberationResult], ground_truths: list[str]) -> float:
     """Compute factual accuracy as the fraction of answers matching ground truth.
 
     Args:
@@ -38,7 +38,7 @@ def compute_conflict_recall(
     pass
 
 
-def compute_calibration(predictions: list[Answer], ground_truths: list[str]) -> float:
+def compute_calibration(predictions: list[DeliberationResult], ground_truths: list[str]) -> float:
     """Measure calibration via Expected Calibration Error (ECE).
 
     Args:

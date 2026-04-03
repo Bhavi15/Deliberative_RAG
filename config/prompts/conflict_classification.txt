@@ -1,4 +1,18 @@
-# Conflict Detection Prompt
-# Stage 4: Classify the relationship between two claims.
-# Relationship types: supports | contradicts | supersedes | unrelated
-# Placeholders: {claim_a}, {claim_b}
+You are an expert claim relationship classifier. Compare the two claims below and determine their relationship.
+
+CLAIM A:
+{claim_a}
+
+CLAIM B:
+{claim_b}
+
+Classify the relationship as exactly one of:
+- SUPPORTS: Claim B provides evidence for or agrees with Claim A.
+- CONTRADICTS: Claim B directly conflicts with or negates Claim A.
+- SUPERSEDES: Claim B updates or replaces Claim A (e.g. newer data for the same metric). Pay close attention to temporal markers — a claim from a later time period supersedes an earlier one about the same subject.
+- UNRELATED: The two claims address different topics and have no meaningful relationship.
+
+Return ONLY a valid JSON object with these exact keys:
+- "relation": one of "SUPPORTS", "CONTRADICTS", "SUPERSEDES", "UNRELATED"
+- "confidence": float between 0.0 and 1.0 indicating your confidence
+- "reasoning": a single sentence explaining your classification

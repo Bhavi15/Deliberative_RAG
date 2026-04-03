@@ -4,41 +4,38 @@ Executes vector search and metadata-filtered search against Qdrant for each
 sub-query, then merges and deduplicates the resulting passages.
 """
 
-from src.models import Passage, SubQuery
-from src.pipeline.graph import PipelineState
 
-
-def retrieval_node(state: PipelineState) -> PipelineState:
+def retrieval_node(state: dict) -> dict:
     """LangGraph node: retrieve passages for all sub-queries.
 
     Args:
         state: Current pipeline state with populated sub-queries.
 
     Returns:
-        Updated state with ``passages`` populated.
+        Partial state update with ``passages`` populated.
     """
     pass
 
 
-def retrieve_for_sub_query(sub_query: SubQuery) -> list[Passage]:
+def retrieve_for_sub_query(sub_query: str) -> list[dict]:
     """Run all retrieval strategies for a single sub-query.
 
     Args:
-        sub_query: The sub-query to retrieve passages for.
+        sub_query: The sub-query text to retrieve passages for.
 
     Returns:
-        List of retrieved Passage objects.
+        List of passage dicts with ``"text"``, ``"score"``, and metadata.
     """
     pass
 
 
-def merge_and_deduplicate(passages: list[list[Passage]]) -> list[Passage]:
+def merge_and_deduplicate(passage_groups: list[list[dict]]) -> list[dict]:
     """Merge passage lists from multiple sub-queries and remove duplicates.
 
     Args:
-        passages: Per-sub-query passage lists.
+        passage_groups: Per-sub-query passage lists.
 
     Returns:
-        Flat, deduplicated list of passages sorted by retrieval score.
+        Flat, deduplicated list of passage dicts sorted by score descending.
     """
     pass

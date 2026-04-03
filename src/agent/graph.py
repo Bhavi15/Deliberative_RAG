@@ -7,7 +7,7 @@ ready for synchronous or async invocation.
 from langgraph.graph import StateGraph
 
 from src.agent.state import AgentState
-from src.schemas import Answer
+from src.schemas import DeliberationResult
 
 
 def build_graph() -> StateGraph:
@@ -23,13 +23,13 @@ def build_graph() -> StateGraph:
     pass
 
 
-def run_graph(query_text: str) -> Answer:
+def run_graph(query_text: str) -> DeliberationResult:
     """Execute the full deliberative RAG pipeline for a single query.
 
     Args:
         query_text: Raw user query string.
 
     Returns:
-        A fully populated Answer with reasoning trace and confidence score.
+        A fully populated DeliberationResult with reasoning trace and confidence.
     """
     pass

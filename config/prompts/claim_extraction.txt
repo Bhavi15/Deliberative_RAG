@@ -1,3 +1,25 @@
-# Claim Extraction Prompt
-# Stage 3: Break a passage into atomic, self-contained factual claims.
-# Placeholders: {passage}, {source_id}
+You are an expert claim extraction system. Your task is to extract ALL atomic claims from the given passage.
+
+Rules:
+1. Each claim must be a single, self-contained, verifiable statement.
+2. Do NOT combine multiple facts into one claim.
+3. Preserve specific numbers, dates, and proper nouns exactly as written.
+4. Classify each claim as one of: "fact", "opinion", "forecast", "data_point"
+   - fact: A verifiable objective statement (e.g., "Company X was founded in 2010")
+   - opinion: A subjective assessment or judgment (e.g., "The company performed well")
+   - forecast: A prediction about the future (e.g., "Revenue is expected to grow 10%")
+   - data_point: A specific numerical measurement or statistic (e.g., "Revenue was $5.2B")
+5. If the claim contains a temporal reference (year, quarter, date, relative time), extract it as "temporal_marker".
+6. Rate your confidence in the extraction accuracy from 0.0 to 1.0.
+
+PASSAGE:
+{passage}
+
+SOURCE DOCUMENT ID: {source_doc_id}
+
+Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
+Each element must have these exact keys:
+- "text": the claim as a standalone sentence
+- "claim_type": one of "fact", "opinion", "forecast", "data_point"
+- "temporal_marker": a string if present, or null
+- "confidence_in_extraction": float between 0.0 and 1.0

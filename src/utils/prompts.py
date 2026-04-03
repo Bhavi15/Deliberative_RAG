@@ -26,7 +26,11 @@ def load_prompt(name: str, **kwargs: str) -> str:
         FileNotFoundError: If no prompt file with the given name exists.
         KeyError: If a required placeholder is missing from kwargs.
     """
-    pass
+    path = PROMPTS_DIR / f"{name}.txt"
+    template = path.read_text(encoding="utf-8")
+    if kwargs:
+        return template.format(**kwargs)
+    return template
 
 
 def list_prompts() -> list[str]:
@@ -35,4 +39,4 @@ def list_prompts() -> list[str]:
     Returns:
         Sorted list of prompt file stems.
     """
-    pass
+    return sorted(p.stem for p in PROMPTS_DIR.glob("*.txt"))

@@ -4,11 +4,10 @@ Generates the final answer with an explicit reasoning trace and calibrated
 confidence score from the scored, possibly-conflicting claims.
 """
 
-from src.models import Answer, ConflictEdge, ScoredClaim
-from src.pipeline.graph import PipelineState
+from src.schemas import ConflictEdge, DeliberationResult, ScoredClaim
 
 
-def synthesis_node(state: PipelineState) -> PipelineState:
+def synthesis_node(state: dict) -> dict:
     """LangGraph node: synthesise the final answer from scored claims.
 
     Args:
@@ -24,7 +23,7 @@ def synthesise_answer(
     query_text: str,
     scored_claims: list[ScoredClaim],
     conflict_edges: list[ConflictEdge],
-) -> Answer:
+) -> DeliberationResult:
     """Call the LLM to deliberate over claims and produce a structured answer.
 
     Args:
@@ -33,7 +32,7 @@ def synthesise_answer(
         conflict_edges: Edges flagging contradictions or supersessions.
 
     Returns:
-        An Answer containing text, confidence, and a full ReasoningTrace.
+        An DeliberationResult containing text, confidence, and a full ReasoningTrace.
     """
     pass
 
@@ -54,14 +53,14 @@ def build_synthesis_context(
     pass
 
 
-def parse_answer(llm_output: str, query_id: str) -> Answer:
-    """Parse structured LLM output into an Answer object.
+def parse_answer(llm_output: str, query_id: str) -> DeliberationResult:
+    """Parse structured LLM output into an DeliberationResult object.
 
     Args:
         llm_output: Raw JSON or structured text from the LLM.
         query_id: ID of the originating query.
 
     Returns:
-        A fully populated Answer instance.
+        A fully populated DeliberationResult instance.
     """
     pass
