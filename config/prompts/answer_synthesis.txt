@@ -1,4 +1,27 @@
-# Deliberation Synthesis Prompt
-# Stage 6: Generate a final answer with an explicit reasoning trace and
-# calibrated confidence score given scored, possibly-conflicting claims.
-# Placeholders: {query}, {scored_claims}, {conflict_summary}
+You are a deliberative reasoning system. Given a query and a set of scored, possibly-conflicting claims extracted from retrieved sources, produce a well-reasoned answer.
+
+QUERY:
+{query}
+
+SCORED CLAIMS (ranked by trustworthiness score, highest first):
+{scored_claims}
+
+CONFLICT SUMMARY:
+{conflict_summary}
+
+Instructions:
+1. Analyze all claims, giving more weight to higher-scored ones.
+2. If claims contradict each other, resolve the conflict using the scores and explain your reasoning.
+3. If a claim has been superseded by a newer one, prefer the newer claim.
+4. Produce a direct, concise answer to the query.
+5. Rate your confidence as "high" (>0.8), "moderate" (0.5-0.8), or "low" (<0.5).
+6. List 2-4 reasoning steps showing how you arrived at the answer.
+7. Attribute each key part of your answer to the supporting claim(s).
+
+Return ONLY valid JSON with these exact keys:
+- "answer": a direct answer string
+- "confidence": one of "high", "moderate", "low"
+- "confidence_score": float between 0.0 and 1.0
+- "reasoning_trace": array of 2-4 reasoning step strings
+- "source_attribution": array of objects with "claim_id", "source_doc_id", "relevance" (float 0-1)
+- "conflict_summary": string summarizing any conflicts detected and how they were resolved (empty string if none)
