@@ -128,3 +128,44 @@ def run_query(
 
     final_state = app.invoke(initial_state)
     return final_state["final_answer"]
+
+
+def run_query_full(
+    query_text: str,
+    llm: LLMClient,
+    qdrant: QdrantManager,
+    embedder: EmbeddingModel,
+    top_k: int = 10,
+) -> dict:
+    """Execute the full pipeline and return the complete final state.
+
+    Like :func:`run_query` but exposes the entire state dict so callers
+    can inspect intermediate outputs (e.g. ``conflict_graph`` for
+    evaluation).
+
+    Args:
+        query_text: Raw user query string.
+        llm: LLM client.
+        qdrant: Qdrant manager.
+        embedder: Embedding model.
+        top_k: Max results per sub-query.
+
+    Returns:
+        The full final ``DeliberativeRAGState`` dict.
+    """
+    app = build_graph(llm, qdrant, embedder, top_k=top_k)
+
+    initial_state: DeliberativeRAGState = {
+        "raw_query": query_text,
+        "structured_query": [],
+        "retrieved_documents": [],
+        "extracted_claims": [],
+        "conflict_graph": {"nodes": [], "edges": []},
+        "scored_claims": [],
+        "final_answer": None,
+        "needs_more_retrieval": False,
+        "retrieval_rounds": 0,
+        "error_log": [],
+    }
+
+    return app.invoke(initial_state)
