@@ -10,6 +10,7 @@ Usage::
     python -m evaluation.run_eval --sample 10         # quick smoke-test
     python -m evaluation.run_eval --dataset conflict_qa --sample 20
     python -m evaluation.run_eval --baseline-only --sample 5
+    python -m evaluation.run_eval --ablation --sample 10   # ablation study
 """
 
 from __future__ import annotations
@@ -24,6 +25,11 @@ from typing import Any
 import structlog
 from tqdm import tqdm
 
+from evaluation.ablations import (
+    ABLATION_CONFIGS,
+    AblationRunner,
+    format_ablation_table,
+)
 from evaluation.baseline_rag import BaselineRAG
 from evaluation.metrics import (
     calibration_error,
@@ -75,6 +81,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="Number of passages to retrieve per query (default: 5).",
+    )
+    parser.add_argument(
+        "--ablation",
+        action="store_true",
+        help="Run ablation study (full system + 4 variants + baseline).",
     )
     return parser.parse_args()
 
@@ -191,6 +202,130 @@ def _error_result(query: str) -> DeliberationResult:
         source_attribution=[],
         conflict_summary="",
     )
+
+
+# ---------------------------------------------------------------------------
+# Ablation study
+# ---------------------------------------------------------------------------
+
+
+def run_ablation_study(
+    dataset_name: str = "all",
+    max_samples: int | None = None,
+    top_k: int = 5,
+) -> dict[str, dict[str, Any]]:
+    """Run the full system, all 4 ablation variants, and the baseline.
+
+    Args:
+        dataset_name: Which benchmark subset to evaluate on.
+        max_samples: Cap on number of examples.
+        top_k: Passages per query.
+
+    Returns:
+        Ordered dict ``{config_label: {metric: value}}``.
+    """
+    examples = load_dataset(dataset_name, max_samples)
+    if not examples:
+        log.warning("no_examples_found", dataset=dataset_name)
+        return {}
+
+    llm = LLMClient(model="claude-sonnet-4-6", temperature=0.0, max_tokens=2048)
+    embedder = EmbeddingModel()
+    qdrant = QdrantManager()
+    judge_llm = LLMClient(model="claude-sonnet-4-6", temperature=0.0, max_tokens=64)
+
+    ground_truths = [ex["ground_truth_answer"] for ex in examples]
+    known_conflicts = [ex.get("has_known_conflict", False) for ex in examples]
+
+    results: dict[str, dict[str, Any]] = {}
+
+    # --- Full system (no ablation) ---
+    log.info("ablation_full_system", count=len(examples))
+    full_preds, full_conflicts = _run_system_on_examples(
+        examples, llm, qdrant, embedder, top_k, label="Full System",
+    )
+    results["Full System"] = _compute_system_metrics(
+        full_preds, full_conflicts, ground_truths, known_conflicts, judge_llm,
+    )
+
+    # --- 4 ablation variants ---
+    for variant_key in ["no_temporal", "no_authority", "no_graph", "no_claims"]:
+        config = ABLATION_CONFIGS[variant_key]
+        runner = AblationRunner(llm, qdrant, embedder, config, top_k=top_k)
+        label = f"- {config.name}"
+
+        log.info("ablation_variant_start", variant=config.name, count=len(examples))
+        preds: list[DeliberationResult] = []
+        conflicts: list[list[ConflictEdge]] = []
+
+        for ex in tqdm(examples, desc=label, unit="query"):
+            out = runner.run(ex["question"])
+            preds.append(out["result"])
+            conflicts.append(out["conflict_edges"])
+
+        results[label] = _compute_system_metrics(
+            preds, conflicts, ground_truths, known_conflicts, judge_llm,
+        )
+
+    # --- Baseline ---
+    log.info("ablation_baseline", count=len(examples))
+    baseline = BaselineRAG(llm, qdrant, embedder, top_k=top_k)
+    bl_preds: list[DeliberationResult] = []
+    for ex in tqdm(examples, desc="Baseline RAG", unit="query"):
+        out = run_baseline_example(ex, baseline)
+        bl_preds.append(out["result"])
+
+    bl_correctness = _compute_correctness(bl_preds, ground_truths, judge_llm)
+    bl_accuracy = sum(bl_correctness) / len(bl_correctness) if bl_correctness else 0.0
+    bl_calibration = confidence_calibration(bl_preds, bl_correctness)
+    results["Baseline RAG"] = {
+        "factual_accuracy": round(bl_accuracy, 4),
+        "conflict_recall": 0.0,
+        "calibration_error": calibration_error(bl_calibration),
+        "calibration": bl_calibration,
+    }
+
+    qdrant.close()
+    return results
+
+
+def _run_system_on_examples(
+    examples: list[dict],
+    llm: LLMClient,
+    qdrant: QdrantManager,
+    embedder: EmbeddingModel,
+    top_k: int,
+    label: str = "Deliberative",
+) -> tuple[list[DeliberationResult], list[list[ConflictEdge]]]:
+    """Run the full deliberative pipeline on a list of examples."""
+    preds: list[DeliberationResult] = []
+    conflicts: list[list[ConflictEdge]] = []
+    for ex in tqdm(examples, desc=label, unit="query"):
+        out = run_deliberative_example(ex, llm, qdrant, embedder, top_k)
+        preds.append(out["result"])
+        conflicts.append(out["conflict_edges"])
+    return preds, conflicts
+
+
+def _compute_system_metrics(
+    preds: list[DeliberationResult],
+    conflicts: list[list[ConflictEdge]],
+    ground_truths: list[str | list[str]],
+    known_conflicts: list[bool],
+    judge_llm: LLMClient,
+) -> dict[str, Any]:
+    """Compute all three metrics for a system's predictions."""
+    correctness = _compute_correctness(preds, ground_truths, judge_llm)
+    accuracy = sum(correctness) / len(correctness) if correctness else 0.0
+    cr = conflict_detection_recall(conflicts, known_conflicts)
+    cal = confidence_calibration(preds, correctness)
+    ece = calibration_error(cal)
+    return {
+        "factual_accuracy": round(accuracy, 4),
+        "conflict_recall": cr,
+        "calibration_error": ece,
+        "calibration": cal,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -398,22 +533,38 @@ def main() -> None:
     args = parse_args()
     start = time.time()
 
-    results = run_evaluation(
-        dataset_name=args.dataset,
-        max_samples=args.sample,
-        baseline_only=args.baseline_only,
-        top_k=args.top_k,
-    )
+    if args.ablation:
+        results = run_ablation_study(
+            dataset_name=args.dataset,
+            max_samples=args.sample,
+            top_k=args.top_k,
+        )
+        elapsed = time.time() - start
+        log.info("ablation_complete", elapsed_sec=round(elapsed, 1))
 
-    elapsed = time.time() - start
-    log.info("evaluation_complete", elapsed_sec=round(elapsed, 1))
-
-    if results:
-        print_results_table(results)
-        path = save_results(results, args.dataset)
-        print(f"\nResults saved to {path}")
+        if results:
+            table = format_ablation_table(results)
+            print(table)
+            path = save_results(results, f"ablation_{args.dataset}")
+            print(f"\nResults saved to {path}")
+        else:
+            print("No results to display.")
     else:
-        print("No results to display.")
+        results = run_evaluation(
+            dataset_name=args.dataset,
+            max_samples=args.sample,
+            baseline_only=args.baseline_only,
+            top_k=args.top_k,
+        )
+        elapsed = time.time() - start
+        log.info("evaluation_complete", elapsed_sec=round(elapsed, 1))
+
+        if results:
+            print_results_table(results)
+            path = save_results(results, args.dataset)
+            print(f"\nResults saved to {path}")
+        else:
+            print("No results to display.")
 
 
 if __name__ == "__main__":
