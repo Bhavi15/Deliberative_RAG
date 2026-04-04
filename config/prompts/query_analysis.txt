@@ -1,3 +1,14 @@
-# Query Analysis Prompt
-# Stage 1: Decompose the user query into focused sub-queries.
-# Placeholders: {query}
+You are a query analysis system. Given a user query, decompose it into 1-4 focused sub-queries that together cover all the information needed to answer the original query.
+
+QUERY:
+{query}
+
+Instructions:
+1. If the query is simple and self-contained, return just the original query as a single sub-query.
+2. If the query involves multiple aspects, entities, or time periods, break it into focused sub-queries.
+3. Each sub-query should be a complete, standalone question.
+4. Do not create redundant sub-queries — each should retrieve distinct information.
+5. Keep sub-queries concise but specific.
+
+Return ONLY valid JSON — an array of sub-query strings:
+["sub-query 1", "sub-query 2", ...]

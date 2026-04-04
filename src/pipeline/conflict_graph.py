@@ -202,7 +202,7 @@ class ConflictGraphBuilder:
 
         relation_raw = data.get("relation", "UNRELATED").upper()
         if relation_raw not in _VALID_RELATIONS:
-            relation_raw = "UNRELATED"
+            return None  # UNRELATED or unrecognised — skip
 
         confidence = data.get("confidence", 0.5)
         try:
