@@ -37,7 +37,26 @@ qdrant_storage/
 ~/.cache/huggingface/
 
 # Streamlit
+.streamlit/
 .streamlit/secrets.toml
+
+# API credentials and data
+/api/.env
+/api/*.pem
+/api/*.key
+
+# Large data files
+/data/raw/
+/data/processed/
+/qdrant_data/
+data/qdrant_data/
+
+# Bundled libraries (third-party JS/CSS)
+/lib/
+
+# Evaluation results and notebooks
+/evaluation/results/
+/notebooks/
 
 # Editors
 .vscode/

@@ -51,7 +51,7 @@ class ClaimExtractor:
         prompt = load_prompt(
             "claim_extraction",
             passage=passage,
-            source_doc_id=source_doc_id,
+            query="",
         )
 
         raw = self._llm.invoke(prompt)
@@ -94,6 +94,118 @@ class ClaimExtractor:
             results.append(claims)
         return results
 
+    def extract_claims_combined(
+        self, passages: list[dict], query: str = "",
+    ) -> list[Claim]:
+        """Extract claims from ALL passages in a single LLM call.
+
+        Combines all passage texts into one prompt to minimise LLM round-trips
+        (critical for slow local inference).
+
+        Args:
+            passages: List of dicts with ``"text"`` and ``"source_doc_id"``.
+            query: The original user query for relevance filtering.
+
+        Returns:
+            Flat list of Claims from all passages.
+        """
+        if not passages:
+            return []
+
+        # Build combined passage block with source IDs in headers
+        source_lookup: dict[str, str] = {}
+        combined = ""
+        for i, p in enumerate(passages):
+            text = p.get("text", "").strip()
+            source = p.get("source_doc_id", f"doc_{i}")
+            source_lookup[source] = source
+            if text:
+                combined += f"\n--- Passage {i+1} (source_id: {source}) ---\n{text}\n"
+
+        prompt = load_prompt(
+            "claim_extraction",
+            passage=combined,
+            query=query,
+        )
+
+        raw = self._llm.invoke(prompt)
+        claims = self._parse_response_combined(raw, source_lookup)
+
+        if claims is not None:
+            return claims
+
+        # Retry once
+        log.warning("claim_extraction_combined_retry")
+        raw_retry = self._llm.invoke(prompt)
+        claims_retry = self._parse_response_combined(raw_retry, source_lookup)
+
+        if claims_retry is not None:
+            return claims_retry
+
+        log.error("claim_extraction_combined_failed")
+        return []
+
+    def _parse_response_combined(
+        self, raw: str, source_lookup: dict[str, str],
+    ) -> list[Claim] | None:
+        """Parse combined extraction response, mapping source_id per claim.
+
+        Args:
+            raw: Raw LLM output (JSON array).
+            source_lookup: Valid source IDs from passages.
+
+        Returns:
+            List of Claims with correct source_doc_id, or None on failure.
+        """
+        try:
+            items = _extract_json_array(raw)
+        except (json.JSONDecodeError, ValueError):
+            log.warning("json_parse_failed", raw_head=raw[:200])
+            return None
+
+        valid_sources = set(source_lookup.keys())
+        fallback_source = next(iter(valid_sources), "unknown")
+
+        max_claims = 5
+        claims: list[Claim] = []
+        for item in items[:max_claims]:
+            if not isinstance(item, dict) or "text" not in item:
+                continue
+
+            # Map source_id from LLM response to actual source doc ID
+            raw_source = str(item.get("source_id", "")).strip()
+            if raw_source in valid_sources:
+                source_doc_id = raw_source
+            else:
+                source_doc_id = fallback_source
+
+            claim_type_raw = item.get("claim_type", "fact")
+            if claim_type_raw not in _VALID_CLAIM_TYPES:
+                claim_type_raw = "fact"
+
+            temporal = item.get("temporal_marker")
+            if temporal is not None:
+                temporal = str(temporal).strip() or None
+
+            confidence = item.get("confidence_in_extraction", 0.8)
+            try:
+                confidence = max(0.0, min(1.0, float(confidence)))
+            except (TypeError, ValueError):
+                confidence = 0.8
+
+            claims.append(
+                Claim(
+                    claim_id=f"claim_{uuid.uuid4().hex[:8]}",
+                    text=item["text"].strip(),
+                    claim_type=ClaimType(claim_type_raw),
+                    source_doc_id=source_doc_id,
+                    temporal_marker=temporal,
+                    confidence_in_extraction=confidence,
+                )
+            )
+
+        return claims
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -114,8 +226,9 @@ class ClaimExtractor:
             log.warning("json_parse_failed", raw_head=raw[:200])
             return None
 
+        max_claims = 5  # Hard cap to limit downstream LLM calls
         claims: list[Claim] = []
-        for item in items:
+        for item in items[:max_claims]:
             if not isinstance(item, dict) or "text" not in item:
                 continue
 

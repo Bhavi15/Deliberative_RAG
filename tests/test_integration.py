@@ -22,17 +22,19 @@ from src.schemas import ConfidenceLevel, DeliberationResult
 # Stage 1: query decomposition → returns a JSON array of sub-queries
 QUERY_DECOMPOSITION_RESPONSE = json.dumps(["What is Kathy Saltzman's occupation?"])
 
-# Stage 3: claim extraction → returns a JSON array of claims
+# Stage 3: claim extraction → returns a JSON array of claims (single combined call)
 CLAIM_EXTRACTION_RESPONSE = json.dumps([
     {
         "text": "Kathy Saltzman is a professional musician and flutist.",
         "claim_type": "fact",
+        "source_id": "doc_param",
         "temporal_marker": None,
         "confidence_in_extraction": 0.85,
     },
     {
         "text": "Kathy Saltzman served in the Minnesota Senate representing District 56.",
         "claim_type": "fact",
+        "source_id": "doc_counter",
         "temporal_marker": None,
         "confidence_in_extraction": 0.92,
     },
@@ -77,21 +79,15 @@ def _make_mock_llm(responses: list[str] | None = None) -> MagicMock:
 
     The default response sequence handles the standard ConflictQA flow:
     1. query decomposition (1 call)
-    2. claim extraction — one call per passage (2 calls)
-    3. conflict classification — one call per pair; 4 claims → C(4,2)=6 pairs (6 calls)
+    2. claim extraction — single combined call (1 call)
+    3. conflict classification — one call per pair; 2 claims → C(2,2)=1 pair (1 call)
     4. synthesis (1 call)
     """
     if responses is None:
         responses = [
             QUERY_DECOMPOSITION_RESPONSE,       # analyze_query_node
-            CLAIM_EXTRACTION_RESPONSE,           # extract_claims_node (passage 1)
-            CLAIM_EXTRACTION_RESPONSE,           # extract_claims_node (passage 2)
-            # conflict classification — 6 pairs from 4 claims
-            CONFLICT_CLASSIFICATION_RESPONSE,
-            CONFLICT_CLASSIFICATION_RESPONSE,
-            CONFLICT_CLASSIFICATION_RESPONSE,
-            CONFLICT_CLASSIFICATION_RESPONSE,
-            CONFLICT_CLASSIFICATION_RESPONSE,
+            CLAIM_EXTRACTION_RESPONSE,           # extract_claims_node (combined)
+            # conflict classification — 1 pair from 2 claims
             CONFLICT_CLASSIFICATION_RESPONSE,
             SYNTHESIS_RESPONSE,                  # synthesize_answer_node
         ]
@@ -150,7 +146,7 @@ class TestFullPipeline:
 
         result = run_query(
             "What is Kathy Saltzman's occupation?",
-            llm=llm, qdrant=qdrant, embedder=embedder,
+            llm_heavy=llm, qdrant=qdrant, embedder=embedder,
         )
 
         assert isinstance(result, DeliberationResult)
@@ -163,7 +159,7 @@ class TestFullPipeline:
 
         result = run_query(
             "What is Kathy Saltzman's occupation?",
-            llm=llm, qdrant=qdrant, embedder=embedder,
+            llm_heavy=llm, qdrant=qdrant, embedder=embedder,
         )
 
         assert len(result.answer) > 0
@@ -176,7 +172,7 @@ class TestFullPipeline:
 
         result = run_query(
             "What is Kathy Saltzman's occupation?",
-            llm=llm, qdrant=qdrant, embedder=embedder,
+            llm_heavy=llm, qdrant=qdrant, embedder=embedder,
         )
 
         assert 0.0 <= result.confidence_score <= 1.0
@@ -190,7 +186,7 @@ class TestFullPipeline:
 
         result = run_query(
             "What is Kathy Saltzman's occupation?",
-            llm=llm, qdrant=qdrant, embedder=embedder,
+            llm_heavy=llm, qdrant=qdrant, embedder=embedder,
         )
 
         assert len(result.reasoning_trace) >= 1
@@ -203,7 +199,7 @@ class TestFullPipeline:
 
         result = run_query(
             "What is Kathy Saltzman's occupation?",
-            llm=llm, qdrant=qdrant, embedder=embedder,
+            llm_heavy=llm, qdrant=qdrant, embedder=embedder,
         )
 
         assert len(result.conflict_summary) > 0
@@ -216,7 +212,7 @@ class TestFullPipeline:
 
         query = "What is Kathy Saltzman's occupation?"
         result = run_query(
-            query, llm=llm, qdrant=qdrant, embedder=embedder,
+            query, llm_heavy=llm, qdrant=qdrant, embedder=embedder,
         )
 
         assert result.query == query
@@ -236,7 +232,7 @@ class TestPipelineEdgeCases:
 
         result = run_query(
             "What is an obscure topic?",
-            llm=llm, qdrant=qdrant, embedder=embedder,
+            llm_heavy=llm, qdrant=qdrant, embedder=embedder,
         )
 
         assert isinstance(result, DeliberationResult)
@@ -249,6 +245,6 @@ class TestPipelineEdgeCases:
         qdrant = MagicMock()
         embedder = MagicMock()
 
-        app = build_graph(llm, qdrant, embedder)
+        app = build_graph(llm_heavy=llm, qdrant=qdrant, embedder=embedder)
         # LangGraph compiled graphs have an invoke method
         assert hasattr(app, "invoke")

@@ -3,6 +3,12 @@
 Wires all six pipeline stage nodes into a compiled LangGraph StateGraph
 ready for synchronous invocation.  Includes a conditional retrieval loop
 that re-fetches when fewer than 3 documents are found (up to 3 rounds).
+
+Two LLM tiers are supported so heavy stages use a larger model while
+frequent/simple stages use a smaller, faster one:
+
+- **heavy** (synthesis, claim extraction): ``llm_heavy``
+- **light** (query analysis, conflict classification): ``llm_light``
 """
 
 from __future__ import annotations
@@ -29,10 +35,11 @@ from src.vectorstore.qdrant_client import QdrantManager
 
 
 def build_graph(
-    llm: LLMClient,
+    llm_heavy: LLMClient,
     qdrant: QdrantManager,
     embedder: EmbeddingModel,
     top_k: int = 10,
+    llm_light: LLMClient | None = None,
 ) -> Any:
     """Construct and compile the deliberative RAG LangGraph workflow.
 
@@ -45,20 +52,25 @@ def build_graph(
                                   extract → conflict_graph → score → synthesize → END
 
     Args:
-        llm: LLM client shared across nodes.
+        llm_heavy: LLM client for heavy stages (claim extraction, synthesis).
         qdrant: Qdrant manager for retrieval.
         embedder: Embedding model for retrieval and graph building.
         top_k: Max results per sub-query retrieval.
+        llm_light: Optional lighter LLM for simple stages (query analysis,
+            conflict classification).  Falls back to *llm_heavy* if not given.
 
     Returns:
         Compiled LangGraph runnable.
     """
+    if llm_light is None:
+        llm_light = llm_heavy
+
     # Bind dependencies into node functions via partial
-    analyze = partial(analyze_query_node, llm=llm)
+    analyze = partial(analyze_query_node, llm=llm_light)
     retrieve = partial(retrieve_documents_node, qdrant=qdrant, embedder=embedder, top_k=top_k)
-    extract = partial(extract_claims_node, llm=llm)
-    build_graph_node = partial(build_conflict_graph_node, llm=llm, embedder=embedder)
-    synthesize = partial(synthesize_answer_node, llm=llm)
+    extract = partial(extract_claims_node, llm=llm_light)
+    build_graph_node = partial(build_conflict_graph_node, llm=llm_light, embedder=embedder)
+    synthesize = partial(synthesize_answer_node, llm=llm_heavy)
 
     workflow = StateGraph(DeliberativeRAGState)
 
@@ -91,27 +103,26 @@ def build_graph(
 
 def run_query(
     query_text: str,
-    llm: LLMClient,
+    llm_heavy: LLMClient,
     qdrant: QdrantManager,
     embedder: EmbeddingModel,
     top_k: int = 10,
+    llm_light: LLMClient | None = None,
 ) -> DeliberationResult:
     """Execute the full deliberative RAG pipeline for a single query.
 
-    Convenience function that builds the graph, initialises state, and
-    runs the workflow.
-
     Args:
         query_text: Raw user query string.
-        llm: LLM client.
+        llm_heavy: LLM client for heavy stages.
         qdrant: Qdrant manager.
         embedder: Embedding model.
         top_k: Max results per sub-query.
+        llm_light: Optional lighter LLM for simple stages.
 
     Returns:
         A fully populated DeliberationResult with reasoning trace and confidence.
     """
-    app = build_graph(llm, qdrant, embedder, top_k=top_k)
+    app = build_graph(llm_heavy, qdrant, embedder, top_k=top_k, llm_light=llm_light)
 
     initial_state: DeliberativeRAGState = {
         "raw_query": query_text,
@@ -132,10 +143,11 @@ def run_query(
 
 def run_query_full(
     query_text: str,
-    llm: LLMClient,
+    llm_heavy: LLMClient,
     qdrant: QdrantManager,
     embedder: EmbeddingModel,
     top_k: int = 10,
+    llm_light: LLMClient | None = None,
 ) -> dict:
     """Execute the full pipeline and return the complete final state.
 
@@ -145,15 +157,16 @@ def run_query_full(
 
     Args:
         query_text: Raw user query string.
-        llm: LLM client.
+        llm_heavy: LLM client for heavy stages.
         qdrant: Qdrant manager.
         embedder: Embedding model.
         top_k: Max results per sub-query.
+        llm_light: Optional lighter LLM for simple stages.
 
     Returns:
         The full final ``DeliberativeRAGState`` dict.
     """
-    app = build_graph(llm, qdrant, embedder, top_k=top_k)
+    app = build_graph(llm_heavy, qdrant, embedder, top_k=top_k, llm_light=llm_light)
 
     initial_state: DeliberativeRAGState = {
         "raw_query": query_text,

@@ -1,7 +1,8 @@
 # LLM & orchestration
-langchain-anthropic>=0.3
+langchain-ollama>=1.0
 langgraph>=0.2
 langchain-core>=0.3
+deepagents>=0.1
 
 # Vector store
 qdrant-client>=1.9
@@ -22,10 +23,23 @@ uvicorn[standard]>=0.30
 
 # UI
 streamlit>=1.35
+pyvis>=0.3
 
 # Datasets
 datasets>=2.20
 huggingface-hub>=0.23
+
+# Web search
+tavily-python>=0.5
+
+# Hybrid retrieval (BM25)
+rank-bm25>=0.2
+
+# Document parsing
+pymupdf>=1.24
+
+# MCP server
+mcp>=1.0
 
 # Utilities
 python-dotenv>=1.0

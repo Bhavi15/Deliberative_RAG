@@ -33,7 +33,7 @@ class ConflictGraphBuilder:
         self,
         llm: LLMClient,
         embedder: EmbeddingModel,
-        similarity_threshold: float = 0.6,
+        similarity_threshold: float = 0.3,
     ) -> None:
         """Initialise the builder.
 
@@ -152,13 +152,18 @@ class ConflictGraphBuilder:
         # Cosine similarity matrix (vectors are already L2-normalised)
         sim_matrix = embeddings @ embeddings.T
 
-        pairs: list[tuple[Claim, Claim]] = []
+        # Collect above-threshold pairs with their similarity scores
+        scored_pairs: list[tuple[float, Claim, Claim]] = []
         n = len(claims)
         for i in range(n):
             for j in range(i + 1, n):
                 if sim_matrix[i, j] >= self._similarity_threshold:
-                    pairs.append((claims[i], claims[j]))
-        return pairs
+                    scored_pairs.append((sim_matrix[i, j], claims[i], claims[j]))
+
+        # Keep only the top-k most similar pairs to limit LLM calls
+        max_pairs = 8
+        scored_pairs.sort(key=lambda x: x[0], reverse=True)
+        return [(a, b) for _, a, b in scored_pairs[:max_pairs]]
 
     def _classify_pair(self, claim_a: Claim, claim_b: Claim) -> ConflictEdge | None:
         """Call the LLM to classify the relationship between two claims.

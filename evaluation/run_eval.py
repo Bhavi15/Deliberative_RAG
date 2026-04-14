@@ -39,7 +39,7 @@ from evaluation.metrics import (
 )
 from src.agent.graph import run_query_full
 from src.schemas import ConflictEdge, DeliberationResult
-from src.utils.llm import LLMClient
+from src.utils.llm import LLMClient, get_llm
 from src.vectorstore.embeddings import EmbeddingModel
 from src.vectorstore.qdrant_client import QdrantManager
 
@@ -133,10 +133,11 @@ def load_dataset(
 
 def run_deliberative_example(
     example: dict,
-    llm: LLMClient,
+    llm_heavy: LLMClient,
     qdrant: QdrantManager,
     embedder: EmbeddingModel,
     top_k: int = 5,
+    llm_light: LLMClient | None = None,
 ) -> dict[str, Any]:
     """Run one example through the deliberative RAG pipeline.
 
@@ -146,10 +147,11 @@ def run_deliberative_example(
     try:
         full_state = run_query_full(
             example["question"],
-            llm=llm,
+            llm_heavy=llm_heavy,
             qdrant=qdrant,
             embedder=embedder,
             top_k=top_k,
+            llm_light=llm_light,
         )
 
         result: DeliberationResult = full_state["final_answer"]
@@ -229,10 +231,11 @@ def run_ablation_study(
         log.warning("no_examples_found", dataset=dataset_name)
         return {}
 
-    llm = LLMClient(model="claude-sonnet-4-6", temperature=0.0, max_tokens=2048)
+    llm_heavy = get_llm("heavy")
+    llm_light = get_llm("light")
+    judge_llm = get_llm("heavy")
     embedder = EmbeddingModel()
     qdrant = QdrantManager()
-    judge_llm = LLMClient(model="claude-sonnet-4-6", temperature=0.0, max_tokens=64)
 
     ground_truths = [ex["ground_truth_answer"] for ex in examples]
     known_conflicts = [ex.get("has_known_conflict", False) for ex in examples]
@@ -242,7 +245,8 @@ def run_ablation_study(
     # --- Full system (no ablation) ---
     log.info("ablation_full_system", count=len(examples))
     full_preds, full_conflicts = _run_system_on_examples(
-        examples, llm, qdrant, embedder, top_k, label="Full System",
+        examples, llm_heavy, qdrant, embedder, top_k,
+        label="Full System", llm_light=llm_light,
     )
     results["Full System"] = _compute_system_metrics(
         full_preds, full_conflicts, ground_truths, known_conflicts, judge_llm,
@@ -251,7 +255,7 @@ def run_ablation_study(
     # --- 4 ablation variants ---
     for variant_key in ["no_temporal", "no_authority", "no_graph", "no_claims"]:
         config = ABLATION_CONFIGS[variant_key]
-        runner = AblationRunner(llm, qdrant, embedder, config, top_k=top_k)
+        runner = AblationRunner(llm_heavy, qdrant, embedder, config, top_k=top_k)
         label = f"- {config.name}"
 
         log.info("ablation_variant_start", variant=config.name, count=len(examples))
@@ -269,7 +273,7 @@ def run_ablation_study(
 
     # --- Baseline ---
     log.info("ablation_baseline", count=len(examples))
-    baseline = BaselineRAG(llm, qdrant, embedder, top_k=top_k)
+    baseline = BaselineRAG(llm_heavy, qdrant, embedder, top_k=top_k)
     bl_preds: list[DeliberationResult] = []
     for ex in tqdm(examples, desc="Baseline RAG", unit="query"):
         out = run_baseline_example(ex, baseline)
@@ -291,17 +295,20 @@ def run_ablation_study(
 
 def _run_system_on_examples(
     examples: list[dict],
-    llm: LLMClient,
+    llm_heavy: LLMClient,
     qdrant: QdrantManager,
     embedder: EmbeddingModel,
     top_k: int,
     label: str = "Deliberative",
+    llm_light: LLMClient | None = None,
 ) -> tuple[list[DeliberationResult], list[list[ConflictEdge]]]:
     """Run the full deliberative pipeline on a list of examples."""
     preds: list[DeliberationResult] = []
     conflicts: list[list[ConflictEdge]] = []
     for ex in tqdm(examples, desc=label, unit="query"):
-        out = run_deliberative_example(ex, llm, qdrant, embedder, top_k)
+        out = run_deliberative_example(
+            ex, llm_heavy, qdrant, embedder, top_k, llm_light=llm_light,
+        )
         preds.append(out["result"])
         conflicts.append(out["conflict_edges"])
     return preds, conflicts
@@ -356,15 +363,13 @@ def run_evaluation(
         return {}
 
     # Initialise shared components
-    llm = LLMClient(
-        model="claude-sonnet-4-6",
-        temperature=0.0,
-        max_tokens=2048,
-    )
+    llm_heavy = get_llm("heavy")
+    llm_light = get_llm("light")
+    judge_llm = get_llm("heavy")
     embedder = EmbeddingModel()
     qdrant = QdrantManager()
 
-    baseline = BaselineRAG(llm, qdrant, embedder, top_k=top_k)
+    baseline = BaselineRAG(llm_heavy, qdrant, embedder, top_k=top_k)
 
     # Collect predictions
     ground_truths = [ex["ground_truth_answer"] for ex in examples]
@@ -388,21 +393,15 @@ def run_evaluation(
     if not baseline_only:
         log.info("running_deliberative", count=len(examples))
         for ex in tqdm(examples, desc="Deliberative RAG", unit="query"):
-            out = run_deliberative_example(ex, llm, qdrant, embedder, top_k)
+            out = run_deliberative_example(
+                ex, llm_heavy, qdrant, embedder, top_k, llm_light=llm_light,
+            )
             delib_preds.append(out["result"])
             delib_conflicts.append(out["conflict_edges"])
             delib_errors.append(out["error"])
 
     # -- Compute metrics --
     log.info("computing_metrics")
-
-    # Use a separate LLM instance for judging (same model, but distinct
-    # for clarity in logs)
-    judge_llm = LLMClient(
-        model="claude-sonnet-4-6",
-        temperature=0.0,
-        max_tokens=64,
-    )
 
     results: dict[str, dict[str, Any]] = {}
 

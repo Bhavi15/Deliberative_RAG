@@ -16,6 +16,8 @@ AUTHORITY_WEIGHTS: dict[str, float] = {
     "blog": 0.15,
     "counter_evidence": 0.5,    # Synthetic contradictions from our dataset
     "generated_counter": 0.5,
+    "uploaded_document": 0.65,  # User-uploaded documents (trusted but unverified)
+    "web_search": 0.55,         # Live web search results
 }
 
 # Default score when the source type is unknown

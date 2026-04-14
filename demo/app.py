@@ -1,5 +1,12 @@
 """Streamlit demo application for Deliberative RAG.
 
+Features:
+- **Deep Research Mode**: Uses the deepagents-powered research agent
+  with iterative web search + KB search + conflict detection
+- **Classic Pipeline Mode**: Original 6-stage LangGraph pipeline
+- **Document Upload**: Analyze uploaded PDFs/docs for conflicts
+- **Streaming**: Real-time reasoning trace display
+
 Run with::
 
     streamlit run demo/app.py
@@ -11,15 +18,24 @@ import json
 import os
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Any
 
+# Suppress noisy torchvision/transformers warnings from Streamlit file watcher
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+warnings.filterwarnings("ignore", message=".*torchvision.*")
+warnings.filterwarnings("ignore", message=".*__path__.*")
+
 import streamlit as st
-import streamlit.components.v1 as components
 
 # Ensure project root is on the path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load .env so settings are available
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv(PROJECT_ROOT / ".env")
 
 from src.schemas import (  # noqa: E402
     Claim,
@@ -71,10 +87,6 @@ EXAMPLE_QUERIES: dict[str, list[dict[str, str]]] = {
             "query": "How many years earlier would Punxsutawney Phil have to be canonically alive to have made a Groundhog Day prediction in the same state as the US capitol?",
             "description": "Multi-step numerical reasoning",
         },
-        {
-            "query": "As of August 1, 2024, which country were holders of the FIFA World Cup the last time the UEFA Champions League was won by a club from London?",
-            "description": "Multi-hop sports/history question",
-        },
     ],
     "FinanceBench": [
         {
@@ -85,15 +97,21 @@ EXAMPLE_QUERIES: dict[str, list[dict[str, str]]] = {
             "query": "Is 3M a capital-intensive business based on FY2022 data?",
             "description": "Analytical financial reasoning",
         },
+    ],
+    "Deep Research (Web)": [
         {
-            "query": "What drove operating margin change as of FY2022 for 3M? If operating margin is not a useful metric for a company like this, then please state that and explain why.",
-            "description": "Financial analysis with conditional reasoning",
+            "query": "What are the current contradictions in scientific consensus about the health effects of intermittent fasting?",
+            "description": "Web search + conflict detection on live sources",
+        },
+        {
+            "query": "Do different sources agree on the current inflation rate in the US?",
+            "description": "Real-time data conflict detection",
         },
     ],
 }
 
 # ---------------------------------------------------------------------------
-# Demo result generation (mock pipeline for offline demo)
+# Demo result generation
 # ---------------------------------------------------------------------------
 
 
@@ -113,20 +131,58 @@ def get_dataset_index() -> dict[str, dict]:
     return _load_dataset_examples()
 
 
-def run_pipeline(
+def run_deep_research_pipeline(
+    query: str,
+    uploaded_files: list[str] | None = None,
+) -> dict[str, Any]:
+    """Run the deep research agent (deepagents + web search + KB + conflict detection).
+
+    Args:
+        query: User query string.
+        uploaded_files: Optional list of uploaded file paths.
+
+    Returns:
+        Dict with result data for rendering.
+    """
+    try:
+        from src.agent.deep_research import run_deep_research
+        result = run_deep_research(query, uploaded_files=uploaded_files)
+
+        return {
+            "answer": result.get("answer", "No result"),
+            "messages": result.get("messages", []),
+            "metadata": result.get("metadata", {}),
+            "is_live": True,
+            "mode": "deep_research",
+        }
+    except Exception as exc:
+        return {
+            "answer": f"Deep research failed: {exc}",
+            "messages": [],
+            "metadata": {"error": str(exc)},
+            "is_live": False,
+            "mode": "deep_research",
+        }
+
+
+def run_classic_pipeline(
     query: str,
     half_life: int,
     authority_weights: dict[str, bool],
 ) -> dict[str, Any]:
-    """Run the deliberative pipeline or return demo results.
+    """Run the classic 6-stage deliberative pipeline.
 
-    Attempts to use the real pipeline if an API key is configured;
-    otherwise falls back to a synthetic demo result built from the
-    evaluation dataset.
+    Args:
+        query: User query string.
+        half_life: Temporal decay half-life in days.
+        authority_weights: Which authority types to include.
+
+    Returns:
+        Dict with result data for rendering.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
-    if api_key:
+    if ollama_url:
         return _run_live_pipeline(query, half_life, authority_weights)
 
     return _build_demo_result(query)
@@ -139,16 +195,20 @@ def _run_live_pipeline(
 ) -> dict[str, Any]:
     """Run the real pipeline with live LLM calls."""
     from src.agent.graph import run_query_full
-    from src.utils.llm import LLMClient
+    from src.utils.llm import get_llm
     from src.vectorstore.embeddings import EmbeddingModel
     from src.vectorstore.qdrant_client import QdrantManager
 
-    llm = LLMClient(model="claude-sonnet-4-6", temperature=0.0, max_tokens=2048)
+    llm_heavy = get_llm("heavy")
+    llm_light = get_llm("light")
     embedder = EmbeddingModel()
     qdrant = QdrantManager()
 
     try:
-        full_state = run_query_full(query, llm=llm, qdrant=qdrant, embedder=embedder)
+        full_state = run_query_full(
+            query, llm_heavy=llm_heavy, qdrant=qdrant,
+            embedder=embedder, llm_light=llm_light, top_k=3,
+        )
         result: DeliberationResult = full_state["final_answer"]
         scored_claims: list[ScoredClaim] = full_state.get("scored_claims", [])
         raw_edges = full_state.get("conflict_graph", {}).get("edges", [])
@@ -160,6 +220,7 @@ def _run_live_pipeline(
             "conflict_edges": conflict_edges,
             "documents": documents,
             "is_live": True,
+            "mode": "classic",
         }
     finally:
         qdrant.close()
@@ -181,7 +242,6 @@ def _build_demo_result(query: str) -> dict[str, Any]:
     else:
         gt_text = gt
 
-    # Build synthetic claims from passages
     scored_claims: list[ScoredClaim] = []
     for i, p in enumerate(passages):
         text = p.get("text", "")[:200]
@@ -201,7 +261,6 @@ def _build_demo_result(query: str) -> dict[str, Any]:
             final_score=0.82 if is_correct else 0.45,
         ))
 
-    # Build synthetic conflict edges
     conflict_edges: list[ConflictEdge] = []
     if has_conflict and len(scored_claims) >= 2:
         conflict_edges.append(ConflictEdge(
@@ -212,7 +271,6 @@ def _build_demo_result(query: str) -> dict[str, Any]:
             reasoning="Sources provide mutually exclusive claims about the subject.",
         ))
 
-    # Add supporting edges between non-conflicting claims
     for i in range(len(scored_claims)):
         for j in range(i + 1, len(scored_claims)):
             if scored_claims[i].final_score > 0.6 and scored_claims[j].final_score > 0.6:
@@ -229,7 +287,6 @@ def _build_demo_result(query: str) -> dict[str, Any]:
                         reasoning="Claims are consistent and mutually reinforcing.",
                     ))
 
-    # Build result
     if has_conflict:
         conf = ConfidenceLevel.HIGH
         conf_score = 0.88
@@ -293,6 +350,7 @@ def _build_demo_result(query: str) -> dict[str, Any]:
         "conflict_edges": conflict_edges,
         "documents": documents,
         "is_live": False,
+        "mode": "classic",
     }
 
 
@@ -300,10 +358,10 @@ def _build_fallback_result(query: str) -> dict[str, Any]:
     """Fallback when query is not in the dataset and no API key is set."""
     result = DeliberationResult(
         query=query,
-        answer="This demo requires either an ANTHROPIC_API_KEY environment variable for live queries, or a query from the pre-loaded examples.",
+        answer="This query is not in the pre-loaded examples. Make sure Ollama is running for live queries, or try one of the example queries.",
         confidence=ConfidenceLevel.LOW,
         confidence_score=0.1,
-        reasoning_trace=["No API key configured.", "Query not found in pre-loaded dataset."],
+        reasoning_trace=["Query not found in pre-loaded dataset."],
         source_attribution=[],
         conflict_summary="",
     )
@@ -313,6 +371,7 @@ def _build_fallback_result(query: str) -> dict[str, Any]:
         "conflict_edges": [],
         "documents": [],
         "is_live": False,
+        "mode": "classic",
     }
 
 
@@ -325,14 +384,54 @@ def render_header() -> None:
     """Render the page title and introductory description."""
     st.title("Deliberative RAG")
     st.caption(
-        "Conflict-Aware Retrieval Reasoning \u2014 detects contradictions between "
+        "Conflict-Aware Retrieval Reasoning — detects contradictions between "
         "sources, scores claims by recency and authority, and generates answers "
-        "with explicit reasoning traces."
+        "with explicit reasoning traces. Powered by Deep Research Agent, "
+        "Web Search, and MCP protocol."
     )
 
 
-def render_sidebar_settings() -> tuple[int, dict[str, bool]]:
-    """Render the left panel settings and return current values."""
+def render_sidebar_settings() -> tuple[str, int, dict[str, bool], list[str]]:
+    """Render the left panel settings and return current values.
+
+    Returns:
+        Tuple of (mode, half_life, authority_weights, uploaded_file_paths).
+    """
+    st.sidebar.header("Research Mode")
+
+    mode = st.sidebar.radio(
+        "Select mode",
+        options=["Deep Research", "Classic Pipeline"],
+        index=0,
+        help=(
+            "**Deep Research**: Uses deepagents with iterative web + KB search "
+            "and conflict detection.\n\n"
+            "**Classic Pipeline**: Original 6-stage LangGraph pipeline on "
+            "indexed knowledge base only."
+        ),
+    )
+
+    st.sidebar.markdown("---")
+
+    # Document upload
+    st.sidebar.header("Document Upload")
+    uploaded_files = st.sidebar.file_uploader(
+        "Upload documents for conflict analysis",
+        type=["pdf", "txt", "md", "html"],
+        accept_multiple_files=True,
+        help="Upload PDFs or text files. Claims will be extracted and "
+             "cross-referenced against web + KB sources.",
+    )
+
+    # Save uploaded files to temp directory
+    uploaded_paths: list[str] = []
+    if uploaded_files:
+        for uf in uploaded_files:
+            temp_path = Path(tempfile.gettempdir()) / uf.name
+            temp_path.write_bytes(uf.getbuffer())
+            uploaded_paths.append(str(temp_path))
+
+    st.sidebar.markdown("---")
     st.sidebar.header("Settings")
 
     half_life = st.sidebar.slider(
@@ -353,7 +452,7 @@ def render_sidebar_settings() -> tuple[int, dict[str, bool]]:
         "blog": st.sidebar.checkbox("Blog posts", value=False),
     }
 
-    return half_life, weights
+    return mode, half_life, weights, uploaded_paths
 
 
 def render_example_queries() -> str | None:
@@ -388,7 +487,6 @@ def render_source_documents(documents: list[dict]) -> None:
         source = doc.get("source", "unknown")
         text = doc.get("text", "")
 
-        # Score badge color
         if score >= 0.8:
             badge = f":green[{score:.2f}]"
         elif score >= 0.5:
@@ -396,7 +494,7 @@ def render_source_documents(documents: list[dict]) -> None:
         else:
             badge = f":red[{score:.2f}]"
 
-        with st.sidebar.expander(f"Doc {i + 1} ({source}) \u2014 {badge}"):
+        with st.sidebar.expander(f"Doc {i + 1} ({source}) -- {badge}"):
             st.write(text[:500])
             if len(text) > 500:
                 st.caption(f"... ({len(text)} chars total)")
@@ -406,16 +504,6 @@ def render_confidence_badge(result: DeliberationResult) -> None:
     """Render the answer with a colored confidence indicator."""
     conf = result.confidence.value
     score = result.confidence_score
-
-    if conf == "high":
-        color = "green"
-        icon = "\u2705"
-    elif conf == "moderate":
-        color = "orange"
-        icon = "\u26a0\ufe0f"
-    else:
-        color = "red"
-        icon = "\u274c"
 
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -430,6 +518,25 @@ def render_confidence_badge(result: DeliberationResult) -> None:
 
     if result.conflict_summary:
         st.warning(f"**Conflicts detected:** {result.conflict_summary}")
+
+
+def render_deep_research_result(output: dict[str, Any]) -> None:
+    """Render deep research agent output with streaming-style display."""
+    answer = output.get("answer", "")
+    metadata = output.get("metadata", {})
+
+    st.subheader("Deep Research Result")
+
+    if metadata.get("error"):
+        st.error(f"Research error: {metadata['error']}")
+        return
+
+    # Display the answer
+    st.markdown(answer)
+
+    # Metadata
+    with st.expander("Research Metadata"):
+        st.json(metadata)
 
 
 def render_conflict_graph(
@@ -452,15 +559,14 @@ def render_conflict_graph(
     )
     net.barnes_hut(gravity=-3000, central_gravity=0.3, spring_length=150)
 
-    # Color nodes by score
     for sc in scored_claims:
         score = sc.final_score
         if score >= 0.7:
-            color = "#4CAF50"  # green
+            color = "#4CAF50"
         elif score >= 0.4:
-            color = "#FF9800"  # orange
+            color = "#FF9800"
         else:
-            color = "#F44336"  # red
+            color = "#F44336"
 
         label = sc.text[:60] + ("..." if len(sc.text) > 60 else "")
         title = (
@@ -481,7 +587,6 @@ def render_conflict_graph(
             font={"size": 11, "color": "white"},
         )
 
-    # Color edges by type
     edge_colors = {
         RelationType.SUPPORTS: "#4CAF50",
         RelationType.CONTRADICTS: "#F44336",
@@ -493,7 +598,6 @@ def render_conflict_graph(
         width = 2 if edge.relation == RelationType.SUPPORTS else 3
         dashes = edge.relation == RelationType.SUPERSEDES
 
-        # Add missing nodes if necessary
         if edge.source_claim_id not in [n["id"] for n in net.nodes]:
             net.add_node(edge.source_claim_id, label=edge.source_claim_id, color="#666")
         if edge.target_claim_id not in [n["id"] for n in net.nodes]:
@@ -511,7 +615,6 @@ def render_conflict_graph(
             font={"size": 10, "color": color, "strokeWidth": 0},
         )
 
-    # Render to HTML and embed
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".html", delete=False, encoding="utf-8",
     ) as f:
@@ -521,9 +624,9 @@ def render_conflict_graph(
     with open(html_path, "r", encoding="utf-8") as f:
         html_content = f.read()
 
+    import streamlit.components.v1 as components
     components.html(html_content, height=450, scrolling=False)
 
-    # Legend
     legend_cols = st.columns(5)
     with legend_cols[0]:
         st.markdown(":green[**Green node**] = high score")
@@ -557,7 +660,7 @@ def render_scored_claims(scored_claims: list[ScoredClaim]) -> None:
             score_bar = "\u2588" * int(sc.final_score * 10)
             col1, col2 = st.columns([4, 1])
             with col1:
-                st.markdown(f"**{sc.claim_id}** \u2014 {sc.text[:120]}")
+                st.markdown(f"**{sc.claim_id}** -- {sc.text[:120]}")
                 st.caption(
                     f"Source: `{sc.source_doc_id}` | "
                     f"temporal={sc.temporal_score:.2f} "
@@ -578,8 +681,26 @@ def render_source_attribution(result: DeliberationResult) -> None:
         for sa in result.source_attribution:
             st.markdown(
                 f"- **{sa.claim_id}** from `{sa.source_doc_id}` "
-                f"\u2014 relevance: {sa.relevance:.2f}"
+                f"-- relevance: {sa.relevance:.2f}"
             )
+
+
+def render_architecture_info() -> None:
+    """Render architecture information in an expandable section."""
+    with st.expander("System Architecture", expanded=False):
+        st.markdown("""
+**Deep Research Mode** uses a multi-layer architecture:
+
+1. **Deep Agent** (LangChain `deepagents`) — Plans research, spawns subagents
+2. **Hybrid Retrieval** — BM25 + Vector (Qdrant) + Web (Tavily) with RRF fusion
+3. **Claim Extraction** — LLM breaks passages into atomic claims
+4. **Conflict Graph** — NetworkX graph with SUPPORTS/CONTRADICTS/SUPERSEDES edges
+5. **Temporal-Authority Scoring** — Exponential recency decay + domain authority weights
+6. **Deliberative Synthesis** — Generates answer with reasoning trace + confidence
+
+**Protocols:**
+- **MCP** (Model Context Protocol) — Exposes pipeline as composable tools for Claude Desktop, Cursor, etc.
+        """)
 
 
 # ---------------------------------------------------------------------------
@@ -592,13 +713,12 @@ def main() -> None:
     render_header()
 
     # Sidebar
-    half_life, authority_weights = render_sidebar_settings()
+    mode, half_life, authority_weights, uploaded_paths = render_sidebar_settings()
     selected_example = render_example_queries()
 
     # Main query input
     st.markdown("---")
 
-    # If an example was clicked, use it as the default
     if selected_example and "current_query" not in st.session_state:
         st.session_state["current_query"] = selected_example
     if selected_example:
@@ -610,50 +730,82 @@ def main() -> None:
         placeholder="e.g., What is Kathy Saltzman's occupation?",
     )
 
-    run_button = st.button("Run Pipeline", type="primary", use_container_width=True)
-
-    # Check for API key status
-    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
-    if not has_api_key:
-        st.caption(
-            "No ANTHROPIC_API_KEY detected \u2014 running in demo mode with "
-            "pre-computed results from the evaluation dataset. Set the env var "
-            "for live queries."
+    # Mode indicator
+    if mode == "Deep Research":
+        st.info(
+            "**Deep Research Mode** — Agent will search web + knowledge base, "
+            "iteratively gather sources, and run conflict detection."
         )
+    else:
+        st.info(
+            "**Classic Pipeline** — 6-stage LangGraph pipeline on indexed "
+            "knowledge base."
+        )
+
+    # Upload indicator
+    if uploaded_paths:
+        st.success(f"Uploaded {len(uploaded_paths)} document(s) for analysis.")
+
+    run_button = st.button("Run Research", type="primary", use_container_width=True)
+
+    # Status indicators
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        tavily_key = os.environ.get("TAVILY_API_KEY", "")
+        if tavily_key and not tavily_key.startswith("tvly-xxx"):
+            st.caption("Web Search: Active")
+        else:
+            st.caption("Web Search: Not configured (set TAVILY_API_KEY)")
+    with col2:
+        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        st.caption(f"LLM: Ollama at {ollama_url}")
+    with col3:
+        st.caption(f"Mode: {mode}")
 
     st.markdown("---")
 
+    # Architecture info
+    render_architecture_info()
+
     # Run pipeline on submit
     if run_button and query:
-        with st.spinner("Running deliberative pipeline..."):
-            pipeline_output = run_pipeline(query, half_life, authority_weights)
+        if mode == "Deep Research":
+            with st.spinner("Running deep research agent..."):
+                pipeline_output = run_deep_research_pipeline(
+                    query, uploaded_files=uploaded_paths or None,
+                )
 
-        result: DeliberationResult = pipeline_output["result"]
-        scored_claims: list[ScoredClaim] = pipeline_output["scored_claims"]
-        conflict_edges: list[ConflictEdge] = pipeline_output["conflict_edges"]
-        documents: list[dict] = pipeline_output["documents"]
+            render_deep_research_result(pipeline_output)
 
-        if not pipeline_output.get("is_live", False):
-            st.info("Showing pre-computed demo results. Set ANTHROPIC_API_KEY for live pipeline.")
+        else:
+            # Classic pipeline mode
+            with st.spinner("Running deliberative pipeline..."):
+                pipeline_output = run_classic_pipeline(
+                    query, half_life, authority_weights,
+                )
 
-        # -- Top: Answer with confidence --
-        render_confidence_badge(result)
+            result: DeliberationResult = pipeline_output["result"]
+            scored_claims: list[ScoredClaim] = pipeline_output["scored_claims"]
+            conflict_edges: list[ConflictEdge] = pipeline_output["conflict_edges"]
+            documents: list[dict] = pipeline_output["documents"]
 
-        st.markdown("---")
+            if not pipeline_output.get("is_live", False):
+                st.info("Showing pre-computed demo results. Start Ollama for live pipeline.")
 
-        # -- Middle: Conflict graph --
-        st.subheader("Conflict Graph")
-        render_conflict_graph(scored_claims, conflict_edges)
+            render_confidence_badge(result)
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # -- Bottom: Reasoning trace + details --
-        render_reasoning_trace(result)
-        render_scored_claims(scored_claims)
-        render_source_attribution(result)
+            st.subheader("Conflict Graph")
+            render_conflict_graph(scored_claims, conflict_edges)
 
-        # -- Sidebar: Source documents --
-        render_source_documents(documents)
+            st.markdown("---")
+
+            render_reasoning_trace(result)
+            render_scored_claims(scored_claims)
+            render_source_attribution(result)
+
+            render_source_documents(documents)
 
     elif run_button and not query:
         st.warning("Please enter a query or select an example from the sidebar.")

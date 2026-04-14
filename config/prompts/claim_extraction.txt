@@ -1,25 +1,23 @@
-You are an expert claim extraction system. Your task is to extract ALL atomic claims from the given passage.
+You are an expert claim extraction system. Given a query and several retrieved passages, extract the TOP 5 most important atomic claims that are RELEVANT to the query. Ignore information not related to the query. Return at most 5 claims total.
+
+QUERY: {query}
 
 Rules:
-1. Each claim must be a single, self-contained, verifiable statement.
-2. Do NOT combine multiple facts into one claim.
+1. Each claim must be a single, self-contained, verifiable statement relevant to the query.
+2. Do NOT include claims unrelated to the query.
 3. Preserve specific numbers, dates, and proper nouns exactly as written.
 4. Classify each claim as one of: "fact", "opinion", "forecast", "data_point"
-   - fact: A verifiable objective statement (e.g., "Company X was founded in 2010")
-   - opinion: A subjective assessment or judgment (e.g., "The company performed well")
-   - forecast: A prediction about the future (e.g., "Revenue is expected to grow 10%")
-   - data_point: A specific numerical measurement or statistic (e.g., "Revenue was $5.2B")
-5. If the claim contains a temporal reference (year, quarter, date, relative time), extract it as "temporal_marker".
+5. If the claim contains a temporal reference, extract it as "temporal_marker".
 6. Rate your confidence in the extraction accuracy from 0.0 to 1.0.
+7. Include the source_id to identify which passage the claim came from.
 
-PASSAGE:
+PASSAGES:
 {passage}
-
-SOURCE DOCUMENT ID: {source_doc_id}
 
 Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
 Each element must have these exact keys:
 - "text": the claim as a standalone sentence
 - "claim_type": one of "fact", "opinion", "forecast", "data_point"
+- "source_id": the source identifier from the passage header
 - "temporal_marker": a string if present, or null
 - "confidence_in_extraction": float between 0.0 and 1.0

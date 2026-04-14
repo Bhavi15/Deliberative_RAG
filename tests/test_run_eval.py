@@ -140,7 +140,7 @@ class TestRunDeliberativeExample:
         with patch("evaluation.run_eval.run_query_full", return_value=mock_state):
             out = run_deliberative_example(
                 SAMPLE_DATASET[0],
-                llm=MagicMock(), qdrant=MagicMock(), embedder=MagicMock(),
+                llm_heavy=MagicMock(), qdrant=MagicMock(), embedder=MagicMock(),
             )
         assert isinstance(out["result"], DeliberationResult)
         assert len(out["conflict_edges"]) == 1
@@ -151,7 +151,7 @@ class TestRunDeliberativeExample:
         with patch("evaluation.run_eval.run_query_full", side_effect=RuntimeError("fail")):
             out = run_deliberative_example(
                 SAMPLE_DATASET[0],
-                llm=MagicMock(), qdrant=MagicMock(), embedder=MagicMock(),
+                llm_heavy=MagicMock(), qdrant=MagicMock(), embedder=MagicMock(),
             )
         assert out["error"] is not None
         assert out["result"].confidence == ConfidenceLevel.LOW

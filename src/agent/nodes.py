@@ -139,9 +139,10 @@ def extract_claims_node(
             if doc.get("text", "").strip()
         ]
 
-        all_claims: list[Claim] = []
-        for batch in extractor.extract_claims_batch(passages):
-            all_claims.extend(batch)
+        # Single batched call: combine all passages into one prompt
+        all_claims = extractor.extract_claims_combined(
+            passages, query=state["raw_query"],
+        )
 
         log.info("claims_extracted", count=len(all_claims))
         return {"extracted_claims": all_claims}

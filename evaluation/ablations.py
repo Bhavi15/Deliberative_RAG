@@ -159,9 +159,7 @@ class AblationRunner:
                 for doc in documents
                 if doc.get("text", "").strip()
             ]
-            claims: list[Claim] = []
-            for batch in extractor.extract_claims_batch(passages):
-                claims.extend(batch)
+            claims = extractor.extract_claims_combined(passages, query=query)
             log.info("ablation_stage3", config=self._config.name, claims=len(claims))
 
         # Stage 4 — Conflict Graph (or empty graph)
